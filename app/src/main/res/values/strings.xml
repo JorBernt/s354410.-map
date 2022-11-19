@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">s354410.-map</string>
     <string name="title_activity_maps">MapsActivity</string>
+    <string name="googleApi">AIzaSyCYgP_YS9Up5lteykf6DSP5P6bfevwW6MU</string>
 </resources>

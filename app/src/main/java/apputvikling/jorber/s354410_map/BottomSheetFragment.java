@@ -17,6 +17,7 @@ import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment;
 
+import java.util.List;
 import java.util.Locale;
 
 public class BottomSheetFragment extends BottomSheetDialogFragment {
@@ -25,14 +26,14 @@ public class BottomSheetFragment extends BottomSheetDialogFragment {
     private IOnClick iOnClick;
     private Marker marker;
     private boolean savedMarker = false;
-    private Address address;
+    private String address;
 
     public BottomSheetFragment(LatLng coordinates, Marker marker) {
         this.coordinates = coordinates;
         this.marker = marker;
     }
 
-    public void setData(LatLng coordinates, Marker marker, Address address) {
+    public void setData(LatLng coordinates, Marker marker, String address) {
         this.coordinates = coordinates;
         this.marker = marker;
         this.address = address;
@@ -46,14 +47,17 @@ public class BottomSheetFragment extends BottomSheetDialogFragment {
         this.marker = marker;
     }
 
-    public void setAddress(Address address) {
+    public void setAddress(String address) {
         this.address = address;
-        System.out.println(address.getAddressLine(0));
+        System.out.println("Address: " + address);
+        ((TextView)getView().findViewById(R.id.addressTextView)).setText(address);
     }
+
 
     @Override
     public void onViewCreated(@NonNull View view, Bundle savedInstanceState) {
         ((TextView)getView().findViewById(R.id.titleTextView)).setText("New Attraction");
+        ((TextView)getView().findViewById(R.id.addressTextView)).setText("Fetching address");
         String coord = String.format(Locale.ENGLISH, "Lat: %.2f\nLong: %.2f", coordinates.latitude, coordinates.longitude);
         ((TextView) getView().findViewById(R.id.coordTextView)).setText(coord);
         Button okButton = view.findViewById(R.id.okBtn);
@@ -61,6 +65,7 @@ public class BottomSheetFragment extends BottomSheetDialogFragment {
             String description = ((EditText) getView().findViewById(R.id.descriptionTextInput)).getText().toString();
             marker.setTitle("Marker");
             marker.setSnippet(description);
+
             savedMarker = true;
             dismiss();
         });
@@ -88,5 +93,13 @@ public class BottomSheetFragment extends BottomSheetDialogFragment {
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         return inflater.inflate(R.layout.bottom_sheet, container, false);
+    }
+
+    public Marker getMarker() {
+        return marker;
+    }
+
+    public void resetSaved() {
+        savedMarker = false;
     }
 }
