@@ -6,6 +6,7 @@ import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.FragmentActivity;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.IntentSender;
 import android.content.pm.PackageManager;
 import android.location.Address;
@@ -13,7 +14,9 @@ import android.location.Geocoder;
 import android.location.Location;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.Looper;
+import android.os.Message;
 import android.util.Log;
 
 import com.google.android.gms.common.ConnectionResult;
@@ -32,6 +35,15 @@ import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.location.LocationRequest;
 import com.google.android.gms.maps.model.MarkerOptions;
 
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
@@ -39,7 +51,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import apputvikling.jorber.s354410_map.databinding.ActivityMapsBinding;
 
 public class MapsActivity extends FragmentActivity implements GoogleApiClient.ConnectionCallbacks,
-        GoogleApiClient.OnConnectionFailedListener, LocationListener, OnMapReadyCallback, IOnClick {
+        GoogleApiClient.OnConnectionFailedListener, LocationListener, OnMapReadyCallback {
 
     private GoogleMap mMap;
     private ActivityMapsBinding binding;
@@ -72,67 +84,71 @@ public class MapsActivity extends FragmentActivity implements GoogleApiClient.Co
                 .setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY)
                 .setInterval(10 * 1000)
                 .setFastestInterval(1 * 1000);
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.INTERNET) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             return;
         }
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         geocoder = new Geocoder(getApplicationContext(), Locale.ENGLISH);
     }
 
+    public void getAddressFromLocation(LatLng latLng) {
+        Thread thread = new Thread() {
+            @Override
+            public void run() {
+                JSONObject jsonObject;
+                String query = "https://maps.googleapis.com/maps/api/geocode/json?latlng=" + latLng.latitude + "," + latLng.longitude + "&key=" + getResources().getString(R.string.googleApi);
+                String location;
+                try {
+                    URL urlen = new URL(query);
+                    HttpURLConnection conn = (HttpURLConnection) urlen.openConnection();
+                    conn.setRequestMethod("POST");
+                    conn.setReadTimeout(15000);
+                    conn.setConnectTimeout(1500);
+                    conn.setDoInput(true);
+                    conn.setDoOutput(true);
+                    conn.setRequestProperty("Accept", "application/json");
+                    if (conn.getResponseCode() != 200) {
+                        throw new RuntimeException("Failed : HTTP error code : " + conn.getResponseCode());
+                    }
+                    BufferedReader br = new BufferedReader(new InputStreamReader((conn.getInputStream())));
+                    String s;
+                    StringBuilder output = new StringBuilder();
+                    while ((s = br.readLine()) != null) {
+                        output.append(s);
+                    }
+                    jsonObject = new JSONObject(output.toString());
+                    conn.disconnect();
+                    System.out.println(output);
+                    location =jsonObject.getJSONObject("results").getString("formatted_address");
+                    bottomSheetFragment.setAddress(location);
+                } catch (IOException | JSONException ex) {
+                    ex.printStackTrace();
+                }
+            }
+        };
+        thread.start();
+        bottomSheetFragment.show(getSupportFragmentManager(), bottomSheetFragment.getTag());
+
+    }
+
     @Override
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
-        class FetchAddress extends AsyncTask<LatLng, Void, Address> {
-            IOnClick iOnClick;
-
-            public FetchAddress(IOnClick iOnClick) {
-                this.iOnClick = iOnClick;
-            }
-
-            @Override
-            protected Address doInBackground(LatLng... params) {
-                LatLng latLng = params[0];
-                Address address = null;
-                System.out.println(latLng.toString());
-                try {
-                     address = geocoder.getFromLocation(latLng.latitude, latLng.longitude, 1).get(0);
-                } catch (Exception e) {
-                }
-                return address;
-            }
-
-            @Override
-            protected void onPostExecute(Address address) {
-                if(address != null)
-                    addAddress(address);
-
-            }
-
-        }
-        AtomicReference<LatLng> pos = new AtomicReference<>();
         mMap.setOnMapClickListener(latLng -> {
             Marker marker = mMap.addMarker(new MarkerOptions().position(latLng).title("New Marker"));
-            if(bottomSheetFragment == null) {
+            if (bottomSheetFragment == null) {
                 bottomSheetFragment = new BottomSheetFragment(latLng, marker);
             }
             bottomSheetFragment.setMarker(marker);
+            bottomSheetFragment.setCoordinates(latLng);
+            bottomSheetFragment.resetSaved();
+            getAddressFromLocation(latLng);
             mMap.moveCamera(CameraUpdateFactory.newLatLng(latLng));
-
-            pos.set(latLng);
-            FetchAddress fetchAddress = new FetchAddress(this);
-            fetchAddress.execute(pos.get());
         });
 
         // Add a marker in Sydney and move the camera
         LatLng oslo = new LatLng(59.911, 10.75);
         mMap.moveCamera(CameraUpdateFactory.newLatLng(oslo));
-    }
-
-    @Override
-    public void addAddress(Address address) {
-        bottomSheetFragment.setAddress(address);
-        bottomSheetFragment.show(getSupportFragmentManager(), bottomSheetFragment.getTag());
-
     }
 
     private LocationCallback mLocationCallback = new LocationCallback() {
@@ -155,7 +171,6 @@ public class MapsActivity extends FragmentActivity implements GoogleApiClient.Co
         mMap.addMarker(options);
         mMap.moveCamera(CameraUpdateFactory.newLatLng(latLng));
     }
-
 
 
     @Override
