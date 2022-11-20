@@ -16,11 +16,11 @@
         android:layout_height="match_parent"
         android:orientation="vertical">
 
-        <TextView
+        <EditText
             android:id="@+id/titleTextView"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="TextView"
+            android:hint="@string/title"
             android:textAlignment="center"
             android:textSize="26sp" />
 

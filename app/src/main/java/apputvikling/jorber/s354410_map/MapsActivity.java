@@ -4,19 +4,17 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.FragmentActivity;
+import androidx.lifecycle.Observer;
+import androidx.lifecycle.ViewModelProvider;
 
 import android.Manifest;
-import android.content.Context;
 import android.content.IntentSender;
 import android.content.pm.PackageManager;
-import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
 import android.os.AsyncTask;
 import android.os.Bundle;
-import android.os.Handler;
 import android.os.Looper;
-import android.os.Message;
 import android.util.Log;
 
 import com.google.android.gms.common.ConnectionResult;
@@ -44,14 +42,16 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.Map;
 
 import apputvikling.jorber.s354410_map.databinding.ActivityMapsBinding;
 
 public class MapsActivity extends FragmentActivity implements GoogleApiClient.ConnectionCallbacks,
-        GoogleApiClient.OnConnectionFailedListener, LocationListener, OnMapReadyCallback {
+        GoogleApiClient.OnConnectionFailedListener, LocationListener, OnMapReadyCallback, IOnClick {
 
     private GoogleMap mMap;
     private ActivityMapsBinding binding;
@@ -62,6 +62,10 @@ public class MapsActivity extends FragmentActivity implements GoogleApiClient.Co
     private FusedLocationProviderClient fusedLocationClient;
     private Geocoder geocoder;
     private BottomSheetFragment bottomSheetFragment;
+    private AttractionViewModel attractionViewModel;
+    private int lastMarkerIndex = -1;
+    private int markerIndex = 0;
+    private Map<Integer, String> addressMap;
 
 
     @Override
@@ -69,7 +73,7 @@ public class MapsActivity extends FragmentActivity implements GoogleApiClient.Co
         super.onCreate(savedInstanceState);
         binding = ActivityMapsBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
-
+        addressMap = new HashMap<>();
         // Obtain the SupportMapFragment and get notified when the map is ready to be used.
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
@@ -89,9 +93,18 @@ public class MapsActivity extends FragmentActivity implements GoogleApiClient.Co
         }
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
         geocoder = new Geocoder(getApplicationContext(), Locale.ENGLISH);
+        attractionViewModel = new ViewModelProvider(this).get(AttractionViewModel.class);
+        final Observer<List<Attraction>> attractionObserver = attractions -> {
+            for (Attraction attraction : attractions) {
+                Marker marker = mMap.addMarker(new MarkerOptions().title(attraction.getTitle()).position(attraction.getLatLng()).snippet(attraction.getDescription()));
+                addressMap.put(markerIndex, attraction.getAddress());
+                marker.setTag(markerIndex++);
+            }
+        };
+        attractionViewModel.getCurrentAttractions().observe(this, attractionObserver);
     }
 
-    public void getAddressFromLocation(LatLng latLng) {
+    public void getAddressFromLocation(LatLng latLng, int mIndex) {
         Thread thread = new Thread() {
             @Override
             public void run() {
@@ -118,37 +131,60 @@ public class MapsActivity extends FragmentActivity implements GoogleApiClient.Co
                     }
                     jsonObject = new JSONObject(output.toString());
                     conn.disconnect();
-                    System.out.println(output);
-                    location =jsonObject.getJSONObject("results").getString("formatted_address");
+                    System.out.println(jsonObject.toString());
+                    location = jsonObject.getJSONArray("results").getJSONObject(1).getString("formatted_address");
                     bottomSheetFragment.setAddress(location);
+                    addressMap.put(mIndex, location);
                 } catch (IOException | JSONException ex) {
                     ex.printStackTrace();
                 }
             }
         };
         thread.start();
-        bottomSheetFragment.show(getSupportFragmentManager(), bottomSheetFragment.getTag());
 
     }
 
     @Override
     public void onMapReady(GoogleMap googleMap) {
+
         mMap = googleMap;
         mMap.setOnMapClickListener(latLng -> {
             Marker marker = mMap.addMarker(new MarkerOptions().position(latLng).title("New Marker"));
-            if (bottomSheetFragment == null) {
-                bottomSheetFragment = new BottomSheetFragment(latLng, marker);
-            }
-            bottomSheetFragment.setMarker(marker);
-            bottomSheetFragment.setCoordinates(latLng);
-            bottomSheetFragment.resetSaved();
-            getAddressFromLocation(latLng);
+            marker.setTag(markerIndex++);
+            bottomSheetFragment = new BottomSheetFragment(latLng, marker, this);
+            bottomSheetFragment.show(getSupportFragmentManager(), bottomSheetFragment.getTag());
+            getAddressFromLocation(latLng, markerIndex - 1);
             mMap.moveCamera(CameraUpdateFactory.newLatLng(latLng));
         });
 
+        mMap.setOnMarkerClickListener(marker -> {
+            //Triks for å åpne "edit" menyen når en marker trykkes på for andre gang.
+            int index = (int) marker.getTag();
+            if (lastMarkerIndex == index) {
+                bottomSheetFragment = new BottomSheetFragment(marker.getPosition(), marker, this);
+                Bundle bundle = new Bundle();
+                bundle.putString("title", marker.getTitle());
+                System.out.println(marker.getTitle());
+                bundle.putString("description", marker.getSnippet());
+                bundle.putString("latlng", String.format(Locale.ENGLISH, "%s,%s", marker.getPosition().latitude, marker.getPosition().longitude));
+                bundle.putString("address", addressMap.get((int)marker.getTag()));
+                bundle.putInt("id", (int)marker.getTag());
+                bottomSheetFragment.setArguments(bundle);
+                bottomSheetFragment.show(getSupportFragmentManager(), bottomSheetFragment.getTag());
+                lastMarkerIndex = -1;
+                return true;
+            }
+            lastMarkerIndex = index;
+            marker.showInfoWindow();
+            mMap.moveCamera(CameraUpdateFactory.newLatLng(marker.getPosition()));
+            return true;
+        });
+
+        getAttractionFromDb();
+
         // Add a marker in Sydney and move the camera
-        LatLng oslo = new LatLng(59.911, 10.75);
-        mMap.moveCamera(CameraUpdateFactory.newLatLng(oslo));
+        /*LatLng oslo = new LatLng(59.911, 10.75);
+        mMap.moveCamera(CameraUpdateFactory.newLatLng(oslo));*/
     }
 
     private LocationCallback mLocationCallback = new LocationCallback() {
@@ -185,14 +221,14 @@ public class MapsActivity extends FragmentActivity implements GoogleApiClient.Co
                 && checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             return;
         }
-        fusedLocationClient.getLastLocation().addOnCompleteListener(task -> {
+        /*fusedLocationClient.getLastLocation().addOnCompleteListener(task -> {
             Location location = task.getResult();
             if (location == null) {
                 requestNewLocationData();
             } else {
                 handleNewLocation(location);
             }
-        });
+        });*/
 
     }
 
@@ -247,5 +283,177 @@ public class MapsActivity extends FragmentActivity implements GoogleApiClient.Co
         if (mGoogleApiClient.isConnected()) {
             mGoogleApiClient.disconnect();
         }
+    }
+
+    @Override
+    public void saveAttractionInDb(String latLng, String title, String description, String address) {
+        class SendJSON extends AsyncTask<String, Void, Void> {
+            @Override
+            protected Void doInBackground(String... urls) {
+                try {
+                    URL url = new URL(urls[0]);
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setRequestProperty("Accept", "application/json");
+                    if (conn.getResponseCode() != 200) {
+                        throw new RuntimeException("Failed : HTTP error code : " + conn.getResponseCode());
+                    }
+                    BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    System.out.println("Output from Server .... \n");
+                    StringBuilder output = new StringBuilder();
+                    while (true) {
+                        String s = br.readLine();
+                        if (s == null)
+                            break;
+                        output.append(s);
+                    }
+                    conn.disconnect();
+                    System.out.println("Request complete");
+                } catch (Exception e) {
+                    System.out.println("Failed to save to db");
+                    e.printStackTrace();
+                }
+                return null;
+            }
+        }
+        SendJSON sendJSON = new SendJSON();
+        sendJSON.execute("http://data1500.cs.oslomet.no/~s354410/jsonin.php?title=" + title + "&description=" + description + "&address=" + address + "&latlng=" + latLng);
+    }
+
+    public void updateAttractionInDb(int id, String latLng, String title, String description, String address) {
+        class SendJSON extends AsyncTask<String, Void, Void> {
+            @Override
+            protected Void doInBackground(String... urls) {
+                try {
+                    URL url = new URL(urls[0]);
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setRequestProperty("Accept", "application/json");
+                    if (conn.getResponseCode() != 200) {
+                        throw new RuntimeException("Failed : HTTP error code : " + conn.getResponseCode());
+                    }
+                    BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    System.out.println("Output from Server .... \n");
+                    StringBuilder output = new StringBuilder();
+                    while (true) {
+                        String s = br.readLine();
+                        if (s == null)
+                            break;
+                        output.append(s);
+                    }
+                    conn.disconnect();
+                    System.out.println("Request complete");
+                } catch (Exception e) {
+
+                }
+                return null;
+            }
+        }
+        SendJSON sendJSON = new SendJSON();
+        sendJSON.execute("http://data1500.cs.oslomet.no/~s354410/jsonupdate.php?id=" + id + "title=" + title + "&description=" + description + "&address=" + address + "&latlng=" + latLng);
+    }
+
+    public void deleteAttractionInDb(int id) {
+        class SendJSON extends AsyncTask<String, Void, Void> {
+            @Override
+            protected Void doInBackground(String... urls) {
+                try {
+                    URL url = new URL(urls[0]);
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setRequestProperty("Accept", "application/json");
+                    if (conn.getResponseCode() != 200) {
+                        throw new RuntimeException("Failed : HTTP error code : " + conn.getResponseCode());
+                    }
+                    BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    System.out.println("Output from Server .... \n");
+                    StringBuilder output = new StringBuilder();
+                    while (true) {
+                        String s = br.readLine();
+                        if (s == null)
+                            break;
+                        output.append(s);
+                    }
+                    conn.disconnect();
+                    System.out.println("Request complete");
+                } catch (Exception e) {
+
+                }
+                return null;
+            }
+        }
+        SendJSON sendJSON = new SendJSON();
+        sendJSON.execute("http://data1500.cs.oslomet.no/~s354410/jsondelete.php?id=" + id);
+    }
+
+    public void getAttractionFromDb() {
+        class GetJSON extends AsyncTask<String, Void, List<JSONObject>> {
+            JSONObject jsonObject = null;
+
+            @Override
+            protected List<JSONObject> doInBackground(String... urls) {
+                try {
+                    URL url = new URL(urls[0]);
+                    HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                    conn.setRequestMethod("GET");
+                    conn.setRequestProperty("Accept", "application/json");
+                    if (conn.getResponseCode() != 200) {
+                        throw new RuntimeException("Failed : HTTP error code : " + conn.getResponseCode());
+                    }
+                    BufferedReader br = new BufferedReader(new InputStreamReader((conn.getInputStream())));
+                    System.out.println("Output from Server .... \n");
+                    StringBuilder output = new StringBuilder();
+                    while (true) {
+                        String s = br.readLine();
+                        if (s == null)
+                            break;
+                        output.append(s);
+                    }
+                    conn.disconnect();
+                    try {
+                        JSONArray mat = new JSONArray(output.toString());
+                        List<JSONObject> attractions = new ArrayList<>();
+                        for (int i = 0; i < mat.length(); i++) {
+                            attractions.add(mat.getJSONObject(i));
+                        }
+                        return attractions;
+                    } catch (JSONException e) {
+                        e.printStackTrace();
+                    }
+                } catch (Exception e) {
+
+                }
+                return null;
+            }
+
+            @Override
+            protected void onPostExecute(List<JSONObject> attractions) {
+                if (attractions == null)
+                    return;
+                try {
+                    List<Attraction> attractionsList = new ArrayList<>();
+                    for (JSONObject attraction : attractions) {
+                        String title = attraction.getString("title");
+                        String description = attraction.getString("description");
+                        String address = attraction.getString("address");
+                        String[] latlngString = attraction.getString("latlng").split(",");
+                        LatLng latLng;
+                        try {
+                            latLng = new LatLng(Double.parseDouble(latlngString[0]), Double.parseDouble(latlngString[1]));
+                        } catch (Exception e) {
+                            Log.e("Map", "Could not parse position");
+                            continue;
+                        }
+                        attractionsList.add(new Attraction(title, description, address, latLng));
+                    }
+                    attractionViewModel.getCurrentAttractions().postValue(attractionsList);
+
+                } catch (Exception e) {
+
+                }
+            }
+        }
+        GetJSON getJSON = new GetJSON();
+        getJSON.execute("http://data1500.cs.oslomet.no/~s354410/jsonout.php");
     }
 }
